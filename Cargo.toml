@@ -1,0 +1,22 @@
+[package]
+name = "liaise_proc_macro"
+version = "0.1.1"
+edition = "2024"
+
+license = "MIT OR Apache-2.0"
+description = "enable the use of liaise methodology in a proc macro without a circular dependencies"
+
+authors = ["James Hunt <james@1o.business>"]
+repository = "https://github.com/jameshuntt/liaise_proc_macro"
+
+readme = "readme.md"
+
+
+keywords = ["proc-macro", "diagnostics", "error-codes", "syn", "liaise"]
+categories = ["development-tools::procedural-macro-helpers", "rust-patterns"]
+
+[dependencies]
+syn = { version = "2", default-features = false, features = ["parsing", "printing", "proc-macro"] }
+quote = "1"
+proc-macro2 = "1"
+
