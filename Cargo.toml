@@ -11,7 +11,7 @@ authors = ["James Hunt <james@1o.business>"]
 repository = "https://github.com/jameshuntt/liaise_proc_macro"
 
 readme = "readme.md"
-include = ["src/**", "tests/**", "Cargo.toml", "readme.md", "LICENSE-MIT", "LICENSE-APACHE"]
+include = ["src/**", "tests/**", "Cargo.toml", "CHANGELOG.md", "readme.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
 
 keywords = ["proc-macro", "diagnostics", "error-codes", "syn", "liaise"]
