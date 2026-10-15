@@ -9,7 +9,9 @@
 //!   did before it needed the derive;
 //! - [`LiaiseCode`] renders them exactly as `liaise` does: `[PREFIX0003] message`;
 //! - [`SynBuffer`] folds many `syn::Error`s into one, and the `err_*` helpers
-//!   turn a code and a span or tokens into a `syn::Error`.
+//!   turn a code and a span or tokens into a `syn::Error`;
+//! - [`ensure!`] checks one rule into the buffer and keeps going;
+//! - [`collect_all`] runs every step and returns every value or every error.
 //!
 //! Dependencies: `syn`, `quote`, `proc-macro2`. Nothing else.
 //!
@@ -88,13 +90,14 @@ macro_rules! liaise_codes {
         impl $name {
             /// Every code in the table, in declaration order.
             pub const ALL_CODES: &'static [u16] = &[ $($code),* ];
-            const _UNIQUE: () = $crate::__assert_unique_codes(Self::ALL_CODES);
         }
+
+        // a free const is evaluated by `cargo check` too, not only at codegen
+        const _: () = $crate::__assert_unique_codes($name::ALL_CODES);
 
         impl $crate::LiaiseCode for $name {
             const PREFIX: &'static str = $prefix;
             fn code_id(self) -> u16 {
-                let _ = Self::_UNIQUE;
                 match self { $(Self::$variant => $code),* }
             }
             fn message(self) -> &'static str {
@@ -102,6 +105,40 @@ macro_rules! liaise_codes {
             }
         }
     };
+}
+
+/// Check one rule, record its code in the buffer if it fails, and keep going.
+///
+/// `ensure!(errs, cond, tokens => Code)` pushes `Code` at `tokens` when `cond`
+/// is false; `ensure!(errs, cond, tokens => Code, ctx)` adds context after the
+/// message. The macro is an expression: `true` when the rule held, so a check
+/// that leaves nothing to build from can skip the item:
+///
+/// ```
+/// # use liaise_proc_macro::{ensure, liaise_codes, SynBuffer};
+/// liaise_codes! { prefix: "DEMO", Code { NeedsBool = 1 => "needs a bool" } }
+/// let mut errs = SynBuffer::new();
+/// let ty = proc_macro2::Ident::new("u8", proc_macro2::Span::call_site());
+/// let ok = ensure!(errs, ty == "bool", &ty => Code::NeedsBool);
+/// assert!(!ok);
+/// assert_eq!(errs.finish().unwrap_err().to_string(), "[DEMO0001] needs a bool");
+/// ```
+#[macro_export]
+macro_rules! ensure {
+    ($errs:expr, $cond:expr, $at:expr => $code:expr) => {{
+        let held: bool = $cond;
+        if !held {
+            $errs.push_spanned($at, $code);
+        }
+        held
+    }};
+    ($errs:expr, $cond:expr, $at:expr => $code:expr, $ctx:expr) => {{
+        let held: bool = $cond;
+        if !held {
+            $errs.push_spanned_ctx($at, $code, $ctx);
+        }
+        held
+    }};
 }
 
 /// Compile-time duplicate check used by [`liaise_codes!`]. Not public API.
@@ -138,6 +175,15 @@ pub fn err_spanned_ctx<C: LiaiseCode>(tokens: impl ToTokens, code: C, ctx: impl 
     Error::new_spanned(tokens, format!("{}: {}", code.render(), ctx))
 }
 
+/// Run every step: all the values if each one worked, otherwise every error
+/// together. The collecting form of `.collect::<Result<Vec<_>, _>>()`, which
+/// stops at the first.
+pub fn collect_all<T>(results: impl IntoIterator<Item = Result<T, Error>>) -> Result<Vec<T>, Error> {
+    let mut errs = SynBuffer::new();
+    let values: Vec<T> = results.into_iter().filter_map(|r| errs.absorb(r)).collect();
+    errs.finish_with(values)
+}
+
 /// Folds many `syn::Error`s into one, so a macro reports everything wrong at
 /// once instead of the first thing. `finish` is the single exit.
 #[derive(Default)]
@@ -152,6 +198,8 @@ impl SynBuffer {
     pub fn is_empty(&self) -> bool {
         self.err.is_none()
     }
+    /// Add `e` (and every error folded into it). An identical message at an
+    /// identical place is shown once by the compiler itself.
     pub fn push(&mut self, e: Error) {
         match &mut self.err {
             Some(existing) => existing.combine(e),
@@ -169,6 +217,21 @@ impl SynBuffer {
     }
     pub fn push_spanned_ctx<C: LiaiseCode>(&mut self, tokens: impl ToTokens, code: C, ctx: impl Display) {
         self.push(err_spanned_ctx(tokens, code, ctx));
+    }
+    /// Take a step that returns `Result`: its value if it worked, otherwise its
+    /// error goes in the buffer and the caller gets `None` and keeps going.
+    pub fn absorb<T>(&mut self, result: Result<T, Error>) -> Option<T> {
+        match result {
+            Ok(value) => Some(value),
+            Err(e) => {
+                self.push(e);
+                None
+            }
+        }
+    }
+    /// `Ok(value)` if nothing was pushed, else the folded error.
+    pub fn finish_with<T>(self, value: T) -> Result<T, Error> {
+        self.finish().map(|()| value)
     }
     /// `Ok(())` if nothing was pushed, else the folded error.
     pub fn finish(self) -> Result<(), Error> {
